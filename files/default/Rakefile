@@ -1,0 +1,110 @@
+require 'logger'
+require 'json'
+require 'pty'
+require 'net/smtp'
+require 'fileutils'
+
+#http://docs.fedoraproject.org/en-US/Fedora/14/html/Software_Management_Guide/ch08s04.html
+#http://docs.fedoraproject.org/en-US/Fedora/14/html/Software_Management_Guide/ch08s07.html
+#http://docs.fedoraproject.org/en-US/Fedora/14/html/Software_Management_Guide/Gesti%C3%B3n_avanzada_de_repositorios_yum.html
+
+logfile = File.open(File.expand_path('yum-sync.log', File.dirname(__FILE__)), "w+")
+logfile.sync = true
+$logger = Logger.new(logfile)
+
+def list_repos(status)
+  skip = true
+  repo_list = []
+  `yum repolist #{status}`.split("\n").each { |line|
+    if skip
+      skip = line.start_with?('repo id') == false
+      next
+    end
+    repo_list << line.split("\s")[0]
+  }
+  repo_list
+end
+
+$all_repos = list_repos(:enabled)
+$disabled_repos = list_repos(:disabled)
+$all_repos += $disabled_repos
+
+# define :mirror_#{name} for each name
+$config = JSON.parse(IO.read('/var/lib/mirror/config.json'))
+$config[:repositories].each{ |repo|
+	name = repo[:name]
+  repo_context = repo[:repo_context]
+
+  if repo[:sync]
+    raise "Repo #{name} was not found as a configured repo:\n$all_repos.join(\"\n\")" unless $all_repos.include?(name)
+
+    multitask "mirror_#{name}".to_sym do
+      begin
+        if $disabled_repos.include?(name)
+          output = `yum-config-manager --enable #{name} 2>&1`
+          raise "errored while enabling repo:#{name} exited with status #{$?.exitstatus}:\n#{output}" unless $?.exitstatus == 0
+        end
+        repo_context = "/#{repo_context}" unless repo_context.start_with?('/')
+        execute_with_realtime_output("reposync -l -r #{name} -p /var/lib/mirror/repo#{repo_context}", "mirror_#{name}: ")
+      rescue Exception => e
+        $logger.info "#{e.message}\n#{e.backtrace}"
+      ensure
+        if $disabled_repos.include?(name)
+          output = `yum-config-manager --disable #{name} 2>&1`
+          raise "errored while disabling repo:#{name} exited with status #{$?.exitstatus}:\n#{output}" unless $?.exitstatus == 0      
+        end
+      end
+    end
+
+    multitask "createrepo_#{repo_context}".to_sym => "mirror_#{name}".to_sym
+  else
+    multitask "createrepo_#{repo_context}".to_sym
+  end
+}
+
+$config[:repositories].collect{|repo| repo[:repo_context]}.uniq.each{|context|
+  multitask "createrepo_#{context}".to_sym do
+    begin
+      context = "/#{context}" unless context.start_with?('/')
+      execute_with_realtime_output("createrepo /var/lib/mirror/repo#{context}", "mirror: ")
+      chown_output = `chown -R apache:apache /var/lib/mirror/repo#{context}`
+      $logger.info chown_output
+      puts chown_output
+      raise "chown failed with exit status: #{$?.exitstatus}" unless $?.exitstatus == 0
+    rescue Exception => e
+      $logger.info "#{e.message}\n#{e.backtrace}"
+    end
+  end
+
+  multitask :mirror => "createrepo_#{context}".to_sym
+}
+
+desc "Sync all mirrors"
+multitask :mirror
+
+task :default => [:mirror]
+
+def execute_with_realtime_output(command, prefix="")
+  begin
+    $logger.info "executing command [#{command} 2>&1] in dir [#{File.expand_path('.')}]"
+    puts "executing command [#{command} 2>&1] in dir [#{File.expand_path('.')}]"
+    PTY.spawn("#{command} 2>&1") do |stdin, stdout, pid|
+      begin
+        # Do stuff with the output here. Just printing to show it works
+        stdin.each { |line|
+          $logger.info "#{prefix}#{line}"
+          print "#{prefix}#{line}"
+        }
+      rescue Errno::EIO => eio
+        $logger.info "Errno:EIO error(#{prefix}), but this probably just means that the process has finished giving output\n#{eio.inspect}"
+        puts "Errno:EIO error(#{prefix}), but this probably just means that the process has finished giving output\n#{eio.inspect}"
+      end
+      Process.wait(pid)
+    end
+    raise "the process(#{prefix}) exited with status #{$?.exitstatus}" unless $?.exitstatus == 0
+  rescue PTY::ChildExited
+    $logger.info "The child process exited!(#{prefix})"
+    puts "The child process exited!(#{prefix})"
+    raise "the process exited unexpectedly(#{prefix})"
+  end
+end

@@ -1,0 +1,20 @@
+<VirtualHost *:443>
+  ServerName <%= @params[:server_name] %>
+  DocumentRoot <%= @params[:document_root] %>
+
+  <Directory "/var/lib/mirror/repo">
+    Options Indexes FollowSymLinks MultiViews
+    AllowOverride None
+    Order allow,deny
+    Allow from all
+  </Directory>
+
+  <%= @params[:customizations] %>
+
+  RequestHeader set X-Forwarded-Proto 'https'
+
+  SSLEngine on
+  SSLCertificateFile <%= @params[:ssl_cert_file] %>
+  SSLCertificateKeyFile <%= @params[:ssl_cert_key_file] %>
+  <%= "SSLCertificateChainFile #{@params[:ssl_cert_chain_file]}" if File.exist?(@params[:ssl_cert_chain_file]) %>
+</VirtualHost>
