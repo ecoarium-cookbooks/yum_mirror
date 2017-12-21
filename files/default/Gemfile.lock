@@ -2,9 +2,11 @@ GEM
   remote: http://rubygems.org/
   specs:
     rake (10.0.3)
+    mixlib-shellout (2.2.7)
 
 PLATFORMS
   ruby
 
 DEPENDENCIES
   rake (= 10.0.3)
+  mixlib-shellout
