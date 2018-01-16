@@ -5,11 +5,18 @@
 
 if in_ec2?()
   aws = data_bag_item('aws', 'api')
-  
+
+  ec2_elastic_ip 'associate_yum_elastic_ip' do
+    aws_access_key aws[:key]
+    aws_secret_access_key aws[:secret]
+    ip node[:yum_mirror][:ip]
+    action :associate
+  end
+
   node[:yum_mirror][:mirrors].each{|repo_info|
 
     next if repo_info[:volume_size].nil?
-    
+
     ec2_ebs_volume repo_info[:name] do
       aws_access_key aws[:key]
       aws_secret_access_key aws[:secret]

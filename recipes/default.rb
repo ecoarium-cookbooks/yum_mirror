@@ -2,9 +2,9 @@
 # Cookbook Name:: yum_mirror
 # Recipe:: default
 #
- 
+
 #
-# Apache 2.0 
+# Apache 2.0
 #
 
 if node[:yum_mirror][:fqdn].nil?
@@ -31,15 +31,6 @@ directory node[:yum_mirror][:repodir] do
 	recursive true
 end
 
-template "#{node[:yum_mirror][:basedir]}/config.json" do
-  source 'rake.conf.erb'
-  variables({
-  	:json_config => {
-  		:repositories => node[:yum_mirror][:repositories]
-  	}
-	})
-end
-
 cookbook_file "#{node[:yum_mirror][:basedir]}/Rakefile" do
 	source 'Rakefile'
 end
@@ -47,7 +38,8 @@ end
 yum_package "yum-utils"
 yum_package 'createrepo'
 
-gem_path = File.dirname(RbConfig.ruby) + '/gem'
+gem_path = `which gem | xargs readlink`.chomp
+ruby_bin = File.dirname(gem_path)
 
 gem_package 'bundler' do
   gem_binary gem_path
@@ -56,9 +48,25 @@ gem_package 'bundler' do
 end
 
 execute 'install_rake' do
-	command "bundle install"
+	command "#{ruby_bin}/bundle install"
 	cwd File.expand_path("../files/default", File.dirname(__FILE__))
-	not_if "#{gem_path} list rake | grep '10.0.3'"
+	not_if "gem list rake | grep '10.0.3' && gem list mixlib-shellout | grep '2.2.7'"
+end
+
+execute 'use_rake_to_make_repos' do
+  command 'rake'
+  cwd node[:yum_mirror][:basedir]
+  action :nothing
+end
+
+template "#{node[:yum_mirror][:basedir]}/config.json" do
+  source 'rake.conf.erb'
+  variables({
+  	:json_config => {
+  		:repositories => node[:yum_mirror][:repositories]
+  	}
+	})
+  notifies :run, 'execute[use_rake_to_make_repos]', :immediately
 end
 
 
@@ -68,5 +76,3 @@ end
 #   weekday '6'
 #   action :create
 # end
-
-
